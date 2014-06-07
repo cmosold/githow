@@ -1,0 +1,287 @@
+<html>
+<head>
+<title>livepatch - Live Patching for Linux</title>
+<meta name="author" content="Fumitoshi UKAI ukai@debian.or.jp">
+</title>
+<body>
+<h1>livepatch - Live Patching for Linux</h1>
+
+<p>'<code>livepatch</code>' is a command to apply binary patches on
+running process.  I wonder this is practical, but it seems to be
+required in teleco area, according to
+<a href="http://pannus.sourceforge.net/">Pannus project page</a>
+(AVL.14.0 of OSDL CGL v3.0).
+I just wrote it <strong>just for hacking</strong> 
+with <code>ptrace(2)</code> and bfd library in a day. It was very fun!
+</p>
+
+<p>"<code>livepatch</code>" is just a small userland program which
+provides functionalities of dynamic loading and overwriting on-memory
+code &amp; data in a running process.  We don't need any unofficial
+kernel patches and/or uncommon libraries. 
+While applying live patch, that is, overwriting on-memory code &amp; data 
+in a target process, the target process will be in sleep status.  
+"<code>livepatch</code>" makes it possible to
+modify on-memory code & data and load ELF shared object or arbitrary
+binary files in a running process.</p>
+
+<p>Thus, "<code>livepatch</code>" may meet 
+<a href="http://www.osdl.org/docs/cgl_availability_req_definition___v30.pdf">AVL.14.0 of OSDL CGL Availability Requirements Definition - version 3.0 (public draft)</a>
+in some level.</p>
+
+<p>Note: it's <em>not</em> part of activities of 
+<a href="http://www.osdl.org">OSDL</a>
+nor <a href="http://www.osdl.jp/">OSDL Japan</a>.</p>
+
+<h2>PREREQUISITE</h2>
+ <p>bfd library that comes with binutils.
+ On Debian GNU/Linux, just install binutils-dev. 
+ (I used binutils-dev 2.15-4)</p>
+
+<blockquote><pre>
+  # apt-get install binutils-dev
+</pre></blockquote>
+
+<h2>BUILD &amp; INSTALL</h2>
+
+<p>You need at least <a href="livepatch.c">livepatch.c</a>
+and optionally <a href="Makefile">Makefile</a>.
+
+<blockquote><pre>
+ $ ls
+ Makefile  README bfd.c fixup.c fixup.txt livepatch.c
+ $ make
+ cc -Wall -O2 -g -c -o livepatch.o livepatch.c
+ cc -o livepatch livepatch.o -lbfd
+ $
+</pre></blockquote>
+
+<p>then, copy <code>livepatch</code> where you want to install.</p>
+
+<h2>USAGE</h2>
+
+<p>You should prepare target processes executable files with symbol tables,
+that is, not stripped version.  
+ If stripped, '<code>livepatch</code>' can't know
+the symbol values of the target process.  Note that the running process may
+be a process invoked from stripped version of the binary file.</p>
+
+<p>If you want to add code to the target, you should write it and compile
+   with -fPIC and -shared, like followings:</p>
+<blockquote><pre>
+    $ cc -shared -fPIC -o foo.so foo.c
+</pre></blockquote>
+<p>If you want to refer a symbol in the target, you should declare it
+   with "<code>extern</code>". 
+   '<code>livepatch</code>' will try to resolve these symbols when the
+   shared object file is loaded by "<code><a href="#dl">dl</a></code>" 
+   instruction of '<code>livepatch</code>'.</p>
+
+<h3>patch instructions</h3>
+<p>patch instructions that 'livepatch' supports are follows:</p>
+
+<dl>
+ <dt><a name="set"><code>set <var><a href="#addr">addr</a></var> <a href="#type-value"><var>type</var> <var>value</var></a></code></a></dt>
+ <dd>
+       set value that is specified by 
+       <a href="#type-value"><var>type</var> and <var>value</var></a> 
+       to <var><a href="#addr">addr</a></var> in a target process.
+ </dd>
+
+ <dt><a name="new"><code>new <var>memname</var> <var>size</var></code></a></dt>
+ <dd>
+       allocate new memory space in a target process.
+       you can refer this area with <var>memname</var> 
+       in the following instructions.
+ </dd>
+
+ <dt><a name="load"><code>load <var>memname</var> <var>filename</var></code></a></dt>
+ <dd>
+       load a file contents in new memory space in a target process.
+       you can refer this area with <var>memname</var> in the following 
+       instructions.
+ </dd>
+
+ <dt><a name="dl"><code>dl <var>memname</var> <var>filename</var></code></a></dt>
+ <dd>
+       load ELF shared object file in new memory space in a target process
+       with resolving dynamic symbols.
+       you can refer this area with <var>memname</var> in the following 
+       instructions,
+       and symbols in this ELF shared object with 
+       <code><var>memname</var>:<var>symbol</var></code>.
+ </dd>
+
+ <dt><a name="jmp"><code>jmp <var><a href="#addr">addr1</a></var> <var><a href="#addr">addr2</a></var></code></a></dt>
+ <dd>
+       set jmp instruction to <var><a href="#addr">addr2</a></var> at <var><a href="#addr">addr1</a></var> 
+       in a target process.
+       As a result, if the process comes (or calls) 
+      <var><a href="#addr">addr1</a></var>, 
+      it will jump to <var><a href="#addr">addr2</a></var>.
+ </dd>
+</dl>
+
+<h3><a name="addr">address parameter</a></h3>
+<p>In <var>addr</var>, you can use the followings</p>
+  
+<dl>
+ <dt>integer value</dt>
+ <dd>
+       It is interpreted as absolute address in a target process.
+ </dd>
+ <dt><code>$<var>memname</var></code></dt>
+ <dd>
+        start address of <var>memname</var> allocated 
+        by "<code><a href="#new">new</a></code>", 
+           "<code><a href="#load">load</a></code>" 
+           or "<code><a href="#dl">dl</a></code>".
+ </dd>
+ <dt><code>$<var>memname</var>:<var>symbol</var></code></dt>
+ <dd>
+        address pointed by <var>symbol</var> in <var>memname</var> 
+        loaded by "<code><a href="#dl">dl</a></code>".
+ </dd>
+ <dt><code>$<var>memname</var>:<var>intvalue</var></code></dt>
+ <dd>
+        start address + intvalue in <var>memname</var>
+ </dd>
+ <dt><var>symbol</var></dt>
+ <dd>
+        address pointed by <var>symbol</var> in target.
+ </dd>
+</dl>
+
+<h3><a name="type-value">data parameter</a></h3>
+<p><var>type<var> <var>value</var>:</p>
+
+<dl>
+ <dt><var>type</var> is <code>int</code></dt>
+ <dd>
+        <var>value</var> is interpreted as integer value 
+        (using <code>strtol(<var>value</var>, NULL, 0)</code>)
+ </dd>
+ <dt><var>type</var> is <code>str</code></dt>
+ <dd>
+        <var>value</var> is interpreted as string. (until <code>'\n'</code>)
+ </dd>
+ <dt><var>type</var> is <code>hex</code></dt>
+ <dd>
+        <var>value</var> is hexadecimal representation.
+        eg. <var>value</var>=<code>686578</code> -&gt; "<code>hex</code>"
+ </dd>
+ <dt><var>type</var> is <code>addr</code></dt>
+ <dd>
+        <var>value</var> is interpreted as 
+        <var><a href="#addr">addr</a></var> described as above.
+ </dd>
+</dl>
+
+<p>'<code>livepatch</code>' will read patch instructions from standard input.
+   You can write them in a file or pass them through pipe.</p>
+
+<h2>EXAMPLES</h2>
+
+<p>run a target process in some terminal</p>
+<pre>
+  $ ./target 
+</pre>
+
+<p>apply patch with 'livepatch' in another terminal</p>
+
+<pre>
+  $ echo 'dl foo patch.so
+  jmp func_J $foo:func1
+  set str_P addr $foo:patch_message' | livepatch $(pidof target) ./target
+</pre>
+
+<p>Then, target's func_J function is replaced with func1 function in patch.so
+and target's str_P pointer variable points to patch_message in patch.so.</p>
+
+<h2>FILES</h2>
+<dl>
+ <dt><a href="Makefile">Makefile</a></dt> 
+   <dd>makefile</dd>
+ <dt><a href="README">README</a></dt>
+   <dd>plain text version of this file</dd>
+ <dt><a href="livepatch.c">livepatch.c</a></dt>	
+  <dd>souce file of livepatch</dd>
+ <dt><a href="ChangeLog">ChangeLog</a></dt>
+  <dd>ChangeLog</dd>
+ <dt><a href="bfd.c">bfd.c</a></dt>
+  <dd>bfd test program while hacking livepatch</dd>
+ <dt><a href="fixup.c">fixup.c</a></dt>
+  <dd>fixuping test program while hacking livepatch</dd>
+ <dt><a href="fixup.txt">fixup.txt</a></dt>
+  <dd>fixup memo from glibc investigation
+     and <a href="http://ukai.jp/debuan/2002w/elf.html">http://ukai.jp/debuan/2002w/elf.html</a>
+  </dd>
+ <dt>presentations</dt>
+ <dd><ul>
+  <li><a href="http://ukai.jp/Slides/2005/1202-b2con/mop/slide-01.html">Lightning Talk: livepatch - concepts and techniques (Japanese)</a> (in <a href="http://namazu.org/~satoru/blog/archives/000078.html">Binary 2.0 conference</a>)</li>
+  <li><a href="http://ukai.jp/Slides/2005/0603-lc2005/html/">Lightning Talk: LivePatch function implementation (Japanese)</a> (in <a href="http://lc.linux.or.jp/lc2005/">Linux Conference 2005</a>)</li>
+ </ul>
+</dl>
+
+<h2>AUTHOR</h2>
+ <address>Fumitoshi UKAI &lt;ukai@debian.or.jp&gt;</address>
+
+<h2>COPYING</h2>
+<pre>
+ * Copyright (C) 2004 Fumitoshi UKAI &lt;ukai@debian.or.jp&gt;
+ * All rights reserved.
+ * This is free software with ABSOLUTELY NO WARRANTY.
+ *
+ * You can redistribute it and/or modify it under the terms of 
+ * the GNU General Public License version 2.
+</pre>
+
+<h2>TODO</h2>
+<ul>
+<li><a href="http://people.redhat.com/drepper/tls.pdf">TLS: Thread Local Storage</a></li>
+<li><a href="http://people.redhat.com/drepper/symbol-versioning">symbol versioning</a></li>
+<li>GOT hooking (ltrace?)</li>
+<li>linux/i386 architecture only. 
+  even if target_alloc() is ported, maybe unportable in some part 
+  (data size, alignment, ...)</li>
+<li>use dynamic linker in ld-linux.so and/or libdl.so?</li>
+<li>changing a pointer variable may not work correctly, because its value
+  is already copied in some other variables, stacks or registers.
+  .changing non volatile pointer may not be reflected in process execution
+  because its pointer may be stored in register.</li>
+<li>check regs/stack before patching.</li>
+<li>interactive mode with readline?</li>
+<li>dynamic shlib replacement? (e.g. libc.so upgrading without restarting daemon)</li>
+<li>language binding (ruby?)</li>
+<li>undo modification?</li>
+<li>gdb script?</li>
+</ul>
+
+<h2>References</h2>
+<ul>
+ <li><a href="http://www.osdl.org/">OSDL (Open Source Development Labs)</a>
+   (<a href="http://www.osdl.jp/">OSDL Japan</a>)</li>
+ <li><a href="http://www.osdl.org/lab_activities/carrier_grade_linux">Carrier Grade Linux</a></li>
+ <li><a href="http://www.osdl.org/lab_activities/carrier_grade_linux/documents.html/document_view">Carrier Grade Linux Documentation</a></li>
+ <li><a href="http://developer.osdl.org/cherry/cgldrafts/index.html">Carrier Grade Linux - V3.0 Public Draft Documents</a>
+  <dl>
+   <dt><a href="http://www.osdl.org/docs/cgl_availability_req_definition___v30.pdf">Carrier Grade Linux Availability Requirements Definition - Version 3.0 (PublicDraft; 8 September 2004)</a></dt>
+   <dd>ID: AVL.14.0; Name: Live Patching<br>
+     Description: OSDL CGL specifies that carrier grade Linux shall provides
+     the mechanisms for a running application's functions to be replaced
+     dynamically (without restarting).</dd>
+  </dl>
+ </li>
+</ul>
+
+<hr>
+<a href="http://freshmeat.net/projects/livepatch">freshmeat.net</a><br>
+<address>Copyright &copy; 2004 Fumitoshi UKAI &lt;ukai@debian.or.jp&gt;<br>
+All rights reserved.<br>
+This is free software with ABSOLUTELY NO WARRANTY.<br>
+$Id: index.html 623 2005-12-03 04:04:13Z ukai $
+</address>
+</body>
+</html>
+
+
